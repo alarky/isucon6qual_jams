@@ -83,6 +83,12 @@ get '/initialize' => sub {
         DELETE FROM entry WHERE id > 7101
     ]);
     $self->dbh->query('TRUNCATE star');
+
+    # warm up
+    $self->dbh->query('SELECT count(*) FROM entry');
+    $self->dbh->query('SELECT count(*) FROM user');
+    $self->dbh->query('SELECT count(*) FROM star');
+
     $c->render_json({
         result => 'ok',
     });
@@ -101,9 +107,10 @@ get '/' => [qw/set_name/] => sub {
     ]);
     
     my $sort_keywords = $self->get_keywords_sort();
+    my $keyword_stars_map = $self->load_stars([ map { $_->{keyword} } @$entries ]);
     foreach my $entry (@$entries) {
         $entry->{html}  = $self->htmlify($c, $sort_keywords, $entry->{description});
-        $entry->{stars} = $self->load_stars($entry->{keyword});
+        $entry->{stars} = $keyword_stars_map->{$entry->{keyword}};
     }
 
     my $total_entries = $self->get_entries();
@@ -217,7 +224,8 @@ get '/keyword/:keyword' => [qw/set_name/] => sub {
     $c->halt(404) unless $entry;
     my $sort_keywords = $self->get_keywords_sort();
     $entry->{html} = $self->htmlify($c, $sort_keywords, $entry->{description});
-    $entry->{stars} = $self->load_stars($entry->{keyword});
+    my $keyword_stars_map = $self->load_stars($entry->{keyword});
+    $entry->{stars} = $keyword_stars_map->{$entry->{keyword}};
 
     $c->render('keyword.tx', { entry => $entry });
 };
@@ -280,12 +288,19 @@ sub htmlify {
 }
 
 sub load_stars {
-    my ($self, $keyword) = @_;
-    my $stars = $self->dbh->select_all(q[
-        SELECT * FROM star WHERE keyword = ?
-    ], $keyword);
+    my ($self, $keywords) = @_;
 
-    $stars;
+    my $ids_in_str = join(',', ('?') x scalar @$keywords);
+    my $stars = $self->dbh->select_all(qq[
+        SELECT * FROM star WHERE keyword IN ($keywords_str)
+    ], @$keywords);
+
+    my $keyword_stars_map = +{};
+    for my $star (@$stars) {
+        $keyword_stars_map->{$star->keyword} ||= [];
+        push @{$keyword_stars_map->{$star->keyword}}, $star;
+    }
+    return $keyword_stars_map;
 }
 
 sub is_spam_contents {
