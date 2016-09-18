@@ -247,15 +247,13 @@ post '/keyword/:keyword' => [qw/set_name authenticate/] => sub {
     my $keyword = $c->args->{keyword} or $c->halt(400);
     $c->req->parameters->{delete} or $c->halt(400);
 
-    $c->halt(404) unless $self->dbh->select_row(qq[
-        SELECT * FROM entry
-        WHERE keyword = ?
-    ], $keyword);
-
-    $self->dbh->query(qq[
+    my $result = $self->dbh->query(qq[
         DELETE FROM entry
         WHERE keyword = ?
     ], $keyword);
+    unless ($result) {
+        $c->halt(404);
+    }
 
     # キャッシュから減算
     $c->env->{'psgix.session'}->{entry_count} = $self->get_entries(-1);
@@ -266,15 +264,14 @@ post '/keyword/:keyword' => [qw/set_name authenticate/] => sub {
 post '/stars' => sub {
     my ($self, $c) = @_;
     my $keyword = $c->req->parameters->{keyword} or $c->halt(404);
-    $c->halt(404) unless $self->dbh->select_row(qq[
-        SELECT * FROM entry
-        WHERE keyword = ?
-    ], $keyword);
 
-    $self->dbh->query(q[
+    my $result = $self->dbh->query(q[
         INSERT INTO star (keyword, user_name, created_at)
         VALUES (?, ?, NOW())
     ], $keyword, $c->req->parameters->{user});
+    unless ($result){
+        $c->halt(404)
+    }
 
     $c->render_json({
         result => 'ok',
