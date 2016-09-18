@@ -95,8 +95,10 @@ get '/' => [qw/set_name/] => sub {
         LIMIT $PER_PAGE
         OFFSET @{[ $PER_PAGE * ($page-1) ]}
     ]);
+    
+    my $sort_keywords = $self->get_keywords_sort();
     foreach my $entry (@$entries) {
-        $entry->{html}  = $self->htmlify($c, $entry->{description});
+        $entry->{html}  = $self->htmlify($c, $sort_keywords, $entry->{description});
         $entry->{stars} = $self->load_stars($entry->{keyword});
     }
 
@@ -206,7 +208,8 @@ get '/keyword/:keyword' => [qw/set_name/] => sub {
         WHERE keyword = ?
     ], $keyword);
     $c->halt(404) unless $entry;
-    $entry->{html} = $self->htmlify($c, $entry->{description});
+    my $sort_keywords = $self->get_keywords_sort();
+    $entry->{html} = $self->htmlify($c, $sort_keywords, $entry->{description});
     $entry->{stars} = $self->load_stars($entry->{keyword});
 
     $c->render('keyword.tx', { entry => $entry });
@@ -230,13 +233,10 @@ post '/keyword/:keyword' => [qw/set_name authenticate/] => sub {
 };
 
 sub htmlify {
-    my ($self, $c, $content) = @_;
+    my ($self, $c, $keywords, $content) = @_;
     return '' unless defined $content;
-    my $keywords = $self->dbh->select_all(qq[
-        SELECT * FROM entry ORDER BY CHARACTER_LENGTH(keyword) DESC
-    ]);
     my %kw2sha;
-    my $re = join '|', map { quotemeta $_->{keyword} } @$keywords;
+    my $re = $keywords;
     $content =~ s{($re)}{
         my $kw = $1;
         $kw2sha{$kw} = "isuda_" . sha1_hex(encode_utf8($kw));
@@ -270,6 +270,16 @@ sub is_spam_contents {
     ]);
     my $data = decode_json $res->content;
     !$data->{valid};
+}
+
+sub get_keywords_sort {
+    my ($self) = @_;
+     my $keywords = $self->dbh->select_all(qq[
+        SELECT keyword FROM entry ORDER BY CHARACTER_LENGTH(keyword) DESC
+    ]);
+
+    my $re = join '|', map { quotemeta $_->{keyword} } @$keywords;
+    $re;
 }
 
 1;
