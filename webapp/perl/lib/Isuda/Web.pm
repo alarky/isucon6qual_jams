@@ -295,8 +295,7 @@ sub get_entries {
 
     if ($entry_count) {
         if ($num) {
-            my $_entry_count = $entry_count + $num;
-            $memd->set('entry_count' => $_entry_count);
+            my $_entry_count = $memd->incr('entry_count', $num);
             return $_entry_count;
         } else {
             return $entry_count;
