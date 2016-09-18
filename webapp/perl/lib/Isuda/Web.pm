@@ -224,7 +224,7 @@ get '/keyword/:keyword' => [qw/set_name/] => sub {
     $c->halt(404) unless $entry;
     my $sort_keywords = $self->get_keywords_sort();
     $entry->{html} = $self->htmlify($c, $sort_keywords, $entry->{description});
-    my $keyword_stars_map = $self->load_stars($entry->{keyword});
+    my $keyword_stars_map = $self->load_stars([$entry->{keyword}]);
     $entry->{stars} = $keyword_stars_map->{$entry->{keyword}};
 
     $c->render('keyword.tx', { entry => $entry });
