@@ -106,7 +106,7 @@ get '/initialize' => sub {
     $self->dbh->query('SELECT * FROM star');
 
     my $entries = $self->dbh->select_all('SELECT * FROM entry');
-    _make_sha1($_->keyword) for @$entries;
+    _make_sha1($_->{keyword}) for @$entries;
 
     $c->render_json({
         result => 'ok',
