@@ -33,6 +33,12 @@ sub _sha1_utf8_hex {
     return $_sha1_utf8_cache{$word} ||= sha1_hex(encode_utf8($word));
 }
 
+sub _make_sha1 {
+    my $word = shift;
+    _sha1_hex($word);
+    _sha1_utf8_hex($word);
+}
+
 sub config {
     state $conf = {
         dsn           => $ENV{ISUDA_DSN}         // 'dbi:mysql:db=isuda',
@@ -97,9 +103,11 @@ get '/initialize' => sub {
     $self->dbh->query('TRUNCATE star');
 
     # warm up
-    $self->dbh->query('SELECT * FROM entry');
     $self->dbh->query('SELECT * FROM user');
     $self->dbh->query('SELECT * FROM star');
+
+    my $entries = $self->dbh->select_all('SELECT * FROM entry');
+    _make_sha1($_->keyword) for @$entries;
 
     $c->render_json({
         result => 'ok',
