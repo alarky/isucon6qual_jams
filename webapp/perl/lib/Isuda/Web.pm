@@ -14,6 +14,7 @@ use URI::Escape qw/uri_escape_utf8/;
 use Text::Xslate::Util qw/html_escape/;
 use List::Util qw/min max/;
 use Cache::Memcached::Fast;
+use List::Util;
 
 my $PER_PAGE = 10;
 
@@ -215,12 +216,15 @@ get '/keyword/:keyword' => [qw/set_name/] => sub {
     my ($self, $c) = @_;
     my $keyword = $c->args->{keyword} // $c->halt(400);
 
-    my $entry = $self->dbh->select_row(qq[
-        SELECT * FROM entry
-        WHERE keyword = ?
-    ], $keyword);
+    my $entries = $self->dbh->select_all(qq[
+        SELECT * FROM entry ORDER BY keyword_length DESC
+    ]);
+
+    my $entry = List::Util::first { $_->{keyword} eq $keyword } @$entries;
     $c->halt(404) unless $entry;
-    my $sort_keywords = $self->get_keywords_sort();
+
+    my $sort_keywords = join '|', map { quotemeta $_->{keyword} } @$entries;
+
     $entry->{html} = $self->htmlify($c, $sort_keywords, $entry->{description});
     $entry->{stars} = $self->load_stars($entry->{keyword});
 
