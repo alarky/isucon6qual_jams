@@ -13,6 +13,13 @@ use Digest::SHA1 qw/sha1_hex/;
 use URI::Escape qw/uri_escape_utf8/;
 use Text::Xslate::Util qw/html_escape/;
 use List::Util qw/min max/;
+use Cache::Memcached::Fast;
+
+my $PER_PAGE = 10;
+
+my $memd = Cache::Memcached::Fast->new({
+    servers => [ { address => 'localhost:11211' }],
+}); 
 
 sub config {
     state $conf = {
@@ -75,6 +82,9 @@ get '/initialize' => sub {
     $self->dbh->query(q[
         DELETE FROM entry WHERE id > 7101
     ]);
+
+    $self->get_entries();
+
     my $origin = config('isutar_origin');
     my $url = URI->new("$origin/initialize");
     Furl->new->get($url);
@@ -86,7 +96,6 @@ get '/initialize' => sub {
 get '/' => [qw/set_name/] => sub {
     my ($self, $c)  = @_;
 
-    my $PER_PAGE = 10;
     my $page = $c->req->parameters->{page} || 1;
 
     my $entries = $self->dbh->select_all(qq[
@@ -95,14 +104,15 @@ get '/' => [qw/set_name/] => sub {
         LIMIT $PER_PAGE
         OFFSET @{[ $PER_PAGE * ($page-1) ]}
     ]);
+    
+    my $sort_keywords = $self->get_keywords_sort();
     foreach my $entry (@$entries) {
-        $entry->{html}  = $self->htmlify($c, $entry->{description});
+        $entry->{html}  = $self->htmlify($c, $sort_keywords, $entry->{description});
         $entry->{stars} = $self->load_stars($entry->{keyword});
     }
 
-    my $total_entries = $self->dbh->select_one(q[
-        SELECT COUNT(*) FROM entry
-    ]);
+    my $total_entries = $self->get_entries();
+
     my $last_page = ceil($total_entries / $PER_PAGE);
     my @pages = (max(1, $page-5)..min($last_page, $page+5));
 
@@ -120,6 +130,7 @@ post '/keyword' => [qw/set_name authenticate/] => sub {
     unless (length $keyword) {
         $c->halt(400, q('keyword' required));
     }
+    my $keyword_length = length $keyword;
     my $user_id = $c->stash->{user_id};
     my $description = $c->req->parameters->{description};
 
@@ -127,11 +138,14 @@ post '/keyword' => [qw/set_name authenticate/] => sub {
         $c->halt(400, 'SPAM!');
     }
     $self->dbh->query(q[
-        INSERT INTO entry (author_id, keyword, description, created_at, updated_at)
-        VALUES (?, ?, ?, NOW(), NOW())
+        INSERT INTO entry (author_id, keyword, description, created_at, updated_at, keyword_length)
+        VALUES (?, ?, ?, NOW(), NOW(), ?)
         ON DUPLICATE KEY UPDATE
-        author_id = ?, keyword = ?, description = ?, updated_at = NOW()
-    ], ($user_id, $keyword, $description) x 2);
+        author_id = ?, keyword = ?, description = ?, updated_at = NOW(), keyword_length = ?
+    ], ($user_id, $keyword, $description, $keyword_length) x 2);
+
+    # キャッシュに加算
+    $c->env->{'psgix.session'}->{entry_count} = $self->get_entries(1);
 
     $c->redirect('/');
 };
@@ -206,7 +220,8 @@ get '/keyword/:keyword' => [qw/set_name/] => sub {
         WHERE keyword = ?
     ], $keyword);
     $c->halt(404) unless $entry;
-    $entry->{html} = $self->htmlify($c, $entry->{description});
+    my $sort_keywords = $self->get_keywords_sort();
+    $entry->{html} = $self->htmlify($c, $sort_keywords, $entry->{description});
     $entry->{stars} = $self->load_stars($entry->{keyword});
 
     $c->render('keyword.tx', { entry => $entry });
@@ -226,17 +241,18 @@ post '/keyword/:keyword' => [qw/set_name authenticate/] => sub {
         DELETE FROM entry
         WHERE keyword = ?
     ], $keyword);
+
+    # キャッシュから減算
+    $c->env->{'psgix.session'}->{entry_count} = $self->get_entries(-1);
+
     $c->redirect('/');
 };
 
 sub htmlify {
-    my ($self, $c, $content) = @_;
+    my ($self, $c, $keywords, $content) = @_;
     return '' unless defined $content;
-    my $keywords = $self->dbh->select_all(qq[
-        SELECT * FROM entry ORDER BY CHARACTER_LENGTH(keyword) DESC
-    ]);
     my %kw2sha;
-    my $re = join '|', map { quotemeta $_->{keyword} } @$keywords;
+    my $re = $keywords;
     $content =~ s{($re)}{
         my $kw = $1;
         $kw2sha{$kw} = "isuda_" . sha1_hex(encode_utf8($kw));
@@ -270,6 +286,40 @@ sub is_spam_contents {
     ]);
     my $data = decode_json $res->content;
     !$data->{valid};
+}
+
+sub get_entries {
+    my ($self, $num) = @_;
+
+    my $entry_count = $memd->get('entry_count');
+
+    if ($entry_count) {
+        if ($num) {
+            my $_entry_count = $entry_count + $num;
+            $memd->set('entry_count' => $_entry_count);
+            return $_entry_count;
+        } else {
+            return $entry_count;
+        }
+
+    } else {
+
+        my $entry_count = $self->dbh->select_one(q[
+            SELECT COUNT(*) FROM entry
+        ]);
+        $memd->set('entry_count' => $entry_count);
+        return $entry_count;
+    }
+}
+
+sub get_keywords_sort {
+    my ($self) = @_;
+     my $keywords = $self->dbh->select_all(qq[
+        SELECT keyword FROM entry ORDER BY keyword_length DESC
+    ]);
+
+    my $re = join '|', map { quotemeta $_->{keyword} } @$keywords;
+    $re;
 }
 
 1;
