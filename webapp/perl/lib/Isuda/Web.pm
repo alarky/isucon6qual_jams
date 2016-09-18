@@ -83,7 +83,6 @@ get '/initialize' => sub {
         DELETE FROM entry WHERE id > 7101
     ]);
     $self->dbh->query('TRUNCATE star');
-    $self->get_entries();
     $c->render_json({
         result => 'ok',
     });
@@ -302,25 +301,10 @@ sub is_spam_contents {
 sub get_entries {
     my ($self, $num) = @_;
 
-    my $entry_count = $memd->get('entry_count');
-
-    if ($entry_count) {
-        if ($num) {
-            my $_entry_count = $entry_count + $num;
-            $memd->set('entry_count' => $_entry_count);
-            return $_entry_count;
-        } else {
-            return $entry_count;
-        }
-
-    } else {
-
-        my $entry_count = $self->dbh->select_one(q[
-            SELECT COUNT(*) FROM entry
-        ]);
-        $memd->set('entry_count' => $entry_count);
-        return $entry_count;
-    }
+    my $entry_count = $self->dbh->select_one(q[
+        SELECT COUNT(id) FROM entry
+    ]);
+    return $entry_count;
 }
 
 sub get_keywords_sort {
