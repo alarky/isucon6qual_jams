@@ -35,7 +35,6 @@ sub _sha1_utf8_hex {
 
 sub _make_sha1 {
     my $word = shift;
-    _sha1_hex($word);
     _sha1_utf8_hex($word);
 }
 
