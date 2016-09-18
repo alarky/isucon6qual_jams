@@ -303,14 +303,14 @@ sub load_stars {
     my ($self, $keywords) = @_;
 
     my $ids_in_str = join(',', ('?') x scalar @$keywords);
-    my $stars = $self->dbh->select_all(qq[
-        SELECT * FROM star WHERE keyword IN ($keywords_str)
-    ], @$keywords);
+    my $stars = $self->dbh->select_all("
+        SELECT * FROM star WHERE keyword IN ($ids_in_str)
+    ", @$keywords);
 
     my $keyword_stars_map = +{};
     for my $star (@$stars) {
-        $keyword_stars_map->{$star->keyword} ||= [];
-        push @{$keyword_stars_map->{$star->keyword}}, $star;
+        $keyword_stars_map->{$star->{keyword}} ||= [];
+        push @{$keyword_stars_map->{$star->{keyword}}}, $star;
     }
     return $keyword_stars_map;
 }
