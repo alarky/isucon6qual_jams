@@ -21,6 +21,18 @@ my $memd = Cache::Memcached::Fast->new({
     servers => [ { address => 'localhost:11211' }],
 }); 
 
+my %_sha1_cache;
+sub _sha1_hex {
+    my $key = shift;
+    return $_sha1_cache{$key} ||= sha1_hex($key);
+}
+
+my %_sha1_utf8_cache;
+sub _sha1_utf8_hex {
+    my $word = shift;
+    return $_sha1_utf8_cache{$word} ||= sha1_hex(encode_utf8($word));
+}
+
 sub config {
     state $conf = {
         dsn           => $ENV{ISUDA_DSN}         // 'dbi:mysql:db=isuda',
@@ -172,7 +184,7 @@ sub register {
     $dbh->query(q[
         INSERT INTO user (name, salt, password, created_at)
         VALUES (?, ?, ?, NOW())
-    ], $user, $salt, sha1_hex($salt . $pass));
+    ], $user, $salt, _sha1_hex($salt . $pass));
 
     return $dbh->last_insert_id;
 }
@@ -192,7 +204,7 @@ post '/login' => sub {
         SELECT * FROM user
         WHERE name = ?
     ], $name);
-    if (!$row || $row->{password} ne sha1_hex($row->{salt}.$c->req->parameters->{password})) {
+    if (!$row || $row->{password} ne _sha1_hex($row->{salt}.$c->req->parameters->{password})) {
         $c->halt(403)
     }
 
@@ -268,7 +280,7 @@ sub htmlify {
     my $re = $keywords;
     $content =~ s{($re)}{
         my $kw = $1;
-        $kw2sha{$kw} = "isuda_" . sha1_hex(encode_utf8($kw));
+        $kw2sha{$kw} = "isuda_" . _sha1_utf8_hex($kw);
     }eg;
     $content = html_escape($content);
     while (my ($kw, $hash) = each %kw2sha) {
