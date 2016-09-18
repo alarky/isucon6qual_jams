@@ -82,12 +82,8 @@ get '/initialize' => sub {
     $self->dbh->query(q[
         DELETE FROM entry WHERE id > 7101
     ]);
-
+    $self->dbh->query('TRUNCATE star');
     $self->get_entries();
-
-    my $origin = config('isutar_origin');
-    my $url = URI->new("$origin/initialize");
-    Furl->new->get($url);
     $c->render_json({
         result => 'ok',
     });
@@ -248,6 +244,24 @@ post '/keyword/:keyword' => [qw/set_name authenticate/] => sub {
     $c->redirect('/');
 };
 
+post '/stars' => sub {
+    my ($self, $c) = @_;
+    my $keyword = $c->req->parameters->{keyword} or $c->halt(404);
+    $c->halt(404) unless $self->dbh->select_row(qq[
+        SELECT * FROM entry
+        WHERE keyword = ?
+    ], $keyword);
+
+    $self->dbh->query(q[
+        INSERT INTO star (keyword, user_name, created_at)
+        VALUES (?, ?, NOW())
+    ], $keyword, $c->req->parameters->{user});
+
+    $c->render_json({
+        result => 'ok',
+    });
+};
+
 sub htmlify {
     my ($self, $c, $keywords, $content) = @_;
     return '' unless defined $content;
@@ -268,14 +282,11 @@ sub htmlify {
 
 sub load_stars {
     my ($self, $keyword) = @_;
-    my $origin = config('isutar_origin');
-    my $url = URI->new("$origin/stars");
-    $url->query_form(keyword => $keyword);
-    my $ua = Furl->new;
-    my $res = $ua->get($url);
-    my $data = decode_json $res->content;
+    my $stars = $self->dbh->select_all(q[
+        SELECT * FROM star WHERE keyword = ?
+    ], $keyword);
 
-    $data->{stars};
+    $stars;
 }
 
 sub is_spam_contents {
