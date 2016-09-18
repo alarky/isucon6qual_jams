@@ -22,6 +22,18 @@ my $memd = Cache::Memcached::Fast->new({
     servers => [ { address => 'localhost:11211' }],
 }); 
 
+my %_sha1_cache;
+sub _sha1_hex {
+    my $key = shift;
+    return $_sha1_cache{$key} ||= sha1_hex($key);
+}
+
+my %_sha1_utf8_cache;
+sub _sha1_utf8_hex {
+    my $word = shift;
+    return $_sha1_utf8_cache{$word} ||= sha1_hex(encode_utf8($word));
+}
+
 sub config {
     state $conf = {
         dsn           => $ENV{ISUDA_DSN}         // 'dbi:mysql:db=isuda',
@@ -83,12 +95,13 @@ get '/initialize' => sub {
     $self->dbh->query(q[
         DELETE FROM entry WHERE id > 7101
     ]);
+    $self->dbh->query('TRUNCATE star');
 
-    $self->get_entries();
+    # warm up
+    $self->dbh->query('SELECT * FROM entry');
+    $self->dbh->query('SELECT * FROM user');
+    $self->dbh->query('SELECT * FROM star');
 
-    my $origin = config('isutar_origin');
-    my $url = URI->new("$origin/initialize");
-    Furl->new->get($url);
     $c->render_json({
         result => 'ok',
     });
@@ -107,9 +120,10 @@ get '/' => [qw/set_name/] => sub {
     ]);
     
     my $sort_keywords = $self->get_keywords_sort();
+    my $keyword_stars_map = $self->load_stars([ map { $_->{keyword} } @$entries ]);
     foreach my $entry (@$entries) {
         $entry->{html}  = $self->htmlify($c, $sort_keywords, $entry->{description});
-        $entry->{stars} = $self->load_stars($entry->{keyword});
+        $entry->{stars} = $keyword_stars_map->{$entry->{keyword}};
     }
 
     my $total_entries = $self->get_entries();
@@ -178,7 +192,7 @@ sub register {
     $dbh->query(q[
         INSERT INTO user (name, salt, password, created_at)
         VALUES (?, ?, ?, NOW())
-    ], $user, $salt, sha1_hex($salt . $pass));
+    ], $user, $salt, _sha1_hex($salt . $pass));
 
     return $dbh->last_insert_id;
 }
@@ -198,7 +212,7 @@ post '/login' => sub {
         SELECT * FROM user
         WHERE name = ?
     ], $name);
-    if (!$row || $row->{password} ne sha1_hex($row->{salt}.$c->req->parameters->{password})) {
+    if (!$row || $row->{password} ne _sha1_hex($row->{salt}.$c->req->parameters->{password})) {
         $c->halt(403)
     }
 
@@ -226,7 +240,8 @@ get '/keyword/:keyword' => [qw/set_name/] => sub {
     my $sort_keywords = join '|', map { quotemeta $_->{keyword} } @$entries;
 
     $entry->{html} = $self->htmlify($c, $sort_keywords, $entry->{description});
-    $entry->{stars} = $self->load_stars($entry->{keyword});
+    my $keyword_stars_map = $self->load_stars([$entry->{keyword}]);
+    $entry->{stars} = $keyword_stars_map->{$entry->{keyword}};
 
     $c->render('keyword.tx', { entry => $entry });
 };
@@ -252,6 +267,24 @@ post '/keyword/:keyword' => [qw/set_name authenticate/] => sub {
     $c->redirect('/');
 };
 
+post '/stars' => sub {
+    my ($self, $c) = @_;
+    my $keyword = $c->req->parameters->{keyword} or $c->halt(404);
+    $c->halt(404) unless $self->dbh->select_row(qq[
+        SELECT * FROM entry
+        WHERE keyword = ?
+    ], $keyword);
+
+    $self->dbh->query(q[
+        INSERT INTO star (keyword, user_name, created_at)
+        VALUES (?, ?, NOW())
+    ], $keyword, $c->req->parameters->{user});
+
+    $c->render_json({
+        result => 'ok',
+    });
+};
+
 sub htmlify {
     my ($self, $c, $keywords, $content) = @_;
     return '' unless defined $content;
@@ -259,7 +292,7 @@ sub htmlify {
     my $re = $keywords;
     $content =~ s{($re)}{
         my $kw = $1;
-        $kw2sha{$kw} = "isuda_" . sha1_hex(encode_utf8($kw));
+        $kw2sha{$kw} = "isuda_" . _sha1_utf8_hex($kw);
     }eg;
     $content = html_escape($content);
     while (my ($kw, $hash) = each %kw2sha) {
@@ -271,15 +304,19 @@ sub htmlify {
 }
 
 sub load_stars {
-    my ($self, $keyword) = @_;
-    my $origin = config('isutar_origin');
-    my $url = URI->new("$origin/stars");
-    $url->query_form(keyword => $keyword);
-    my $ua = Furl->new;
-    my $res = $ua->get($url);
-    my $data = decode_json $res->content;
+    my ($self, $keywords) = @_;
 
-    $data->{stars};
+    my $ids_in_str = join(',', ('?') x scalar @$keywords);
+    my $stars = $self->dbh->select_all("
+        SELECT * FROM star WHERE keyword IN ($ids_in_str)
+    ", @$keywords);
+
+    my $keyword_stars_map = +{};
+    for my $star (@$stars) {
+        $keyword_stars_map->{$star->{keyword}} ||= [];
+        push @{$keyword_stars_map->{$star->{keyword}}}, $star;
+    }
+    return $keyword_stars_map;
 }
 
 sub is_spam_contents {
@@ -295,25 +332,10 @@ sub is_spam_contents {
 sub get_entries {
     my ($self, $num) = @_;
 
-    my $entry_count = $memd->get('entry_count');
-
-    if ($entry_count) {
-        if ($num) {
-            my $_entry_count = $entry_count + $num;
-            $memd->set('entry_count' => $_entry_count);
-            return $_entry_count;
-        } else {
-            return $entry_count;
-        }
-
-    } else {
-
-        my $entry_count = $self->dbh->select_one(q[
-            SELECT COUNT(*) FROM entry
-        ]);
-        $memd->set('entry_count' => $entry_count);
-        return $entry_count;
-    }
+    my $entry_count = $self->dbh->select_one(q[
+        SELECT COUNT(id) FROM entry
+    ]);
+    return $entry_count;
 }
 
 sub get_keywords_sort {
