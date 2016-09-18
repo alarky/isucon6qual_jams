@@ -347,7 +347,11 @@ sub get_keywords_sort {
         SELECT keyword FROM entry ORDER BY keyword_length DESC
     ]);
 
-    my $re = join '|', map { quotemeta $_->{keyword} } @$keywords;
+    my $re = "";
+    for my $keyword (@$keywords) {
+        $re .= quotemeta($keyword->{keyword}) . '|';
+    }
+    chop($re);
     $re;
 }
 
