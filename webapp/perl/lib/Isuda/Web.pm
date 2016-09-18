@@ -85,9 +85,9 @@ get '/initialize' => sub {
     $self->dbh->query('TRUNCATE star');
 
     # warm up
-    $self->dbh->query('SELECT count(*) FROM entry');
-    $self->dbh->query('SELECT count(*) FROM user');
-    $self->dbh->query('SELECT count(*) FROM star');
+    $self->dbh->query('SELECT * FROM entry');
+    $self->dbh->query('SELECT * FROM user');
+    $self->dbh->query('SELECT * FROM star');
 
     $c->render_json({
         result => 'ok',
